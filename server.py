@@ -8,6 +8,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime
 import pytz
 import logging
+import json
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -92,6 +93,58 @@ def get_routing_context(now_et: datetime) -> str:
             "you can offer to attempt reaching Daniel at 954-410-6389. "
             "Do NOT promise immediate response — just offer to pass the message."
         )
+
+@app.route("/context", methods=["POST"])
+def context():
+    """
+    Vapi tool-call endpoint. Called by Vant at the start of every call.
+    Returns current time, open/closed status, and caller ID info.
+    """
+    try:
+        payload = request.get_json(force=True, silent=True) or {}
+        # Extract caller number from tool call payload
+        caller_number = None
+        message = payload.get("message", {})
+        call = message.get("call", {})
+        customer = call.get("customer", {})
+        caller_number = customer.get("number")
+
+        now_et = datetime.now(EASTERN)
+        time_context = get_time_context(now_et)
+        routing_context = get_routing_context(now_et)
+
+        caller_info = ""
+        if caller_number and caller_number in KNOWN_CALLERS:
+            info = KNOWN_CALLERS[caller_number]
+            caller_info = f"Caller is {info['name']} ({info['role']}). {info['note']}"
+        elif caller_number:
+            caller_info = f"Unknown caller from {caller_number}."
+
+        result = {
+            "current_time": time_context,
+            "business_status": routing_context,
+            "caller_info": caller_info
+        }
+
+        app.logger.info(f"Context tool called for {caller_number}: {time_context}")
+
+        return jsonify({
+            "results": [{
+                "toolCallId": message.get("toolCallList", [{}])[0].get("id", "unknown"),
+                "result": json.dumps(result)
+            }]
+        })
+
+    except Exception as e:
+        app.logger.error(f"Context tool error: {e}", exc_info=True)
+        now_et = datetime.now(EASTERN)
+        return jsonify({
+            "results": [{
+                "toolCallId": "unknown",
+                "result": json.dumps({"current_time": get_time_context(now_et)})
+            }]
+        })
+
 
 @app.route("/", methods=["GET"])
 def health():

@@ -27,6 +27,11 @@ KNOWN_CALLERS = {
         "role": "Office Manager",
         "note": "Handles scheduling, billing, and admin. Internal team."
     },
+    "+14078408852": {
+        "name": "David Kell",
+        "role": "Lead Field Technician",
+        "note": "Lead technician in the field. May call with job questions, active service updates, or scheduling issues. Treat as trusted internal team."
+    },
 }
 
 # Business hours (Eastern)

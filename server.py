@@ -1,6 +1,7 @@
 """
 Vant Phone Agent — Vapi Server URL Webhook
 Fires on every inbound call. Injects current Eastern time + caller ID context.
+Also handles end-of-call-report events — sends Telegram notification to Daniel.
 Deploy: Railway (free tier), fly.io, or run locally with ngrok for testing.
 """
 
@@ -9,11 +10,17 @@ from datetime import datetime
 import pytz
 import logging
 import json
+import os
+import requests as http_requests
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 EASTERN = pytz.timezone("America/New_York")
+
+# Telegram notification config
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8653968146:AAHXHthQx3zPuqLjWH7m_W_BbR7j8aDwD28")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8738797908")
 
 # Known callers — grows over time (caller ID memory)
 KNOWN_CALLERS = {
@@ -33,6 +40,23 @@ KNOWN_CALLERS = {
         "note": "Lead technician in the field. May call with job questions, active service updates, or scheduling issues. Treat as trusted internal team."
     },
 }
+
+def send_telegram(text: str):
+    """Send a message to Daniel via Telegram."""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        resp = http_requests.post(url, json={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": text,
+            "parse_mode": "HTML"
+        }, timeout=10)
+        if not resp.ok:
+            app.logger.error(f"Telegram send failed: {resp.status_code} {resp.text[:200]}")
+        return resp.ok
+    except Exception as e:
+        app.logger.error(f"Telegram send error: {e}")
+        return False
+
 
 # Business hours (Eastern)
 BUSINESS_HOURS = {
@@ -164,16 +188,82 @@ def health():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     """
-    Vapi calls this on every inbound call (assistant-request event).
-    We return a system message injection with time context + caller ID.
+    Vapi calls this on every event (assistant-request, end-of-call-report, etc).
+    - assistant-request: inject time context + caller ID into system prompt
+    - end-of-call-report: send Telegram notification to Daniel
     """
     try:
         payload = request.get_json(force=True, silent=True) or {}
-        app.logger.info(f"Vapi webhook received: {payload.get('message', {}).get('type', 'unknown')}")
+        message = payload.get("message", {})
+        event_type = message.get("type", "unknown")
+        app.logger.info(f"Vapi webhook received: {event_type}")
+
+        # ── END-OF-CALL NOTIFICATION ──────────────────────────────────────────
+        if event_type == "end-of-call-report":
+            try:
+                call = message.get("call", {})
+                customer = call.get("customer", {})
+                caller_number = customer.get("number", "Unknown")
+                ended_reason = message.get("endedReason", "unknown")
+                duration_s = message.get("durationSeconds", 0)
+                summary = message.get("summary", "").strip()
+                transcript = message.get("transcript", "").strip()
+
+                # Caller ID lookup
+                caller_label = KNOWN_CALLERS.get(caller_number, {}).get("name", caller_number)
+
+                # Duration formatting
+                if duration_s:
+                    mins = int(duration_s) // 60
+                    secs = int(duration_s) % 60
+                    duration_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+                else:
+                    duration_str = "unknown"
+
+                # Ended reason label
+                reason_labels = {
+                    "customer-ended-call": "caller hung up",
+                    "assistant-forwarded-call": "transferred to live",
+                    "assistant-ended-call": "Vant ended call",
+                    "customer-did-not-answer": "no answer",
+                    "voicemail": "went to voicemail",
+                    "max-duration-exceeded": "max duration hit",
+                    "silence-timed-out": "silence timeout",
+                }
+                reason_str = reason_labels.get(ended_reason, ended_reason)
+
+                # Build the notification
+                lines = [
+                    f"\U0001f41f <b>Vant Call Complete</b>",
+                    f"\U0001f4de {caller_label} \u2022 {duration_str} \u2022 {reason_str}",
+                ]
+
+                if summary:
+                    lines.append(f"")
+                    lines.append(f"\U0001f4cb <b>Summary:</b>")
+                    lines.append(summary[:800])
+
+                if transcript and not summary:
+                    # Only show transcript snippet if no summary
+                    lines.append(f"")
+                    lines.append(f"\U0001f4ac <b>Transcript (last 500 chars):</b>")
+                    lines.append(transcript[-500:])
+
+                notification = "\n".join(lines)
+                send_telegram(notification)
+                app.logger.info(f"End-of-call notification sent for {caller_number}")
+
+            except Exception as e:
+                app.logger.error(f"End-of-call handler error: {e}", exc_info=True)
+
+            # Vapi doesn't need a specific response for this event type
+            return jsonify({"status": "ok"})
+
+        # ── ASSISTANT-REQUEST (call start context injection) ───────────────────
+        app.logger.info(f"Vapi webhook received: {event_type}")
 
         # Extract caller number
         caller_number = None
-        message = payload.get("message", {})
         call = message.get("call", {})
         customer = call.get("customer", {})
         caller_number = customer.get("number")

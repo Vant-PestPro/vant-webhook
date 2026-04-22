@@ -195,19 +195,23 @@ def webhook():
     try:
         payload = request.get_json(force=True, silent=True) or {}
         message = payload.get("message", {})
-        event_type = message.get("type", "unknown")
-        app.logger.info(f"Vapi webhook received: {event_type}")
+
+        # Vapi can send type at top-level OR nested in message
+        event_type = message.get("type") or payload.get("type", "unknown")
+        app.logger.info(f"Vapi webhook received: {event_type} | keys: {list(payload.keys())} | msg_keys: {list(message.keys())}")
 
         # ── END-OF-CALL NOTIFICATION ──────────────────────────────────────────
         if event_type == "end-of-call-report":
             try:
-                call = message.get("call", {})
+                # Vapi may nest data in message{} or at root level
+                src = message if message.get("endedReason") or message.get("call") else payload
+                call = src.get("call", {})
                 customer = call.get("customer", {})
                 caller_number = customer.get("number", "Unknown")
-                ended_reason = message.get("endedReason", "unknown")
-                duration_s = message.get("durationSeconds", 0)
-                summary = message.get("summary", "").strip()
-                transcript = message.get("transcript", "").strip()
+                ended_reason = src.get("endedReason", "unknown")
+                duration_s = src.get("durationSeconds", 0)
+                summary = src.get("summary", "").strip()
+                transcript = src.get("transcript", "").strip()
 
                 # Caller ID lookup
                 caller_label = KNOWN_CALLERS.get(caller_number, {}).get("name", caller_number)

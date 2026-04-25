@@ -313,17 +313,19 @@ def get_routing_context(now_et: datetime) -> str:
 
         return (
             f"It is currently {period} — our office hours are 8 AM to 6 PM, seven days a week. "
-            "We are always available for urgent pest situations, 24 hours a day, 365 days a year. "
+            "We are always available for urgent situations, 24 hours a day, 365 days a year. "
             "IMPORTANT — how to handle this call naturally: "
-            "Do NOT open by announcing we are closed. Instead, warmly acknowledge the caller, "
-            "ask what is going on, and listen. Let them describe their situation first. "
-            "If it sounds urgent (active infestation, health risk, commercial property, can't wait until morning): "
-            "say something like 'I completely understand — that's not something you should have to deal with overnight. "
-            "Let me get someone on the line for you right now.' Then use the transferCall tool to reach our emergency line. "
-            "If it is routine and can wait: say something like 'Absolutely — our team will be back in the office at 8 AM. "
-            "I want to make sure someone reaches out to you first thing. Can I get your name and best callback number?' "
+            "Do NOT open by announcing we are closed. Greet the caller warmly and ask what is going on. Listen first. "
+            "For most callers: say something like 'Of course — our team is available every day from 8 AM to 6 PM. "
+            "I want to make sure someone gets back to you first thing. Can I get your name and best callback number?' "
             "Then collect: (1) full name, (2) best callback number, (3) pest issue, (4) best time to call back. "
-            "Confirm each piece before ending. Always close warmly — they should feel taken care of, not turned away."
+            "Confirm each piece before ending the call. "
+            "Emergency transfer — ONLY if the caller explicitly uses words like 'emergency' or 'urgent,' "
+            "or sounds genuinely panicked or distressed. Even then, ASK first: "
+            "'It sounds like this may not be able to wait — would you like me to connect you with someone on our team right now?' "
+            "If they say yes, use the transferCall tool. If they say no or are unsure, take their message instead. "
+            "Do NOT offer the emergency line based on pest type or severity — that is their call to make, not ours. "
+            "Always close warmly. Every caller should feel heard and taken care of, not turned away."
         )
 
 

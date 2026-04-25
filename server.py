@@ -329,10 +329,12 @@ def get_routing_context(now_et: datetime) -> str:
         return (
             f"We are currently CLOSED — it is {period}. "
             f"The office reopens {next_open}. "
-            "For non-emergency pest issues, offer to take a message or schedule a callback. "
+            "For non-emergency pest issues, take a message. Ask for: (1) their full name, "
+            "(2) best callback number, (3) what pest issue they're dealing with, "
+            "(4) best time to call back. Confirm each piece before ending the call. "
             "For genuine emergencies (active infestation causing health risk, commercial account crisis), "
             "you can offer to attempt reaching Daniel at 954-410-6389. "
-            "Do NOT promise immediate response — just offer to pass the message."
+            "Do NOT promise immediate response — just confirm their message will be passed to the team."
         )
 
 
@@ -517,19 +519,34 @@ def webhook():
                 call_count = caller.get("call_count") if caller else None
                 count_str = f" (call #{call_count})" if call_count else ""
 
+                now_et = datetime.now(EASTERN)
+                after_hours = not is_business_hours(now_et)
+
+                if after_hours:
+                    header = "\U0001f319 <b>After-Hours Message</b>"
+                else:
+                    header = "\U0001f41f <b>Vant Call Complete</b>"
+
                 lines = [
-                    f"\U0001f41f <b>Vant Call Complete</b>",
+                    header,
                     f"\U0001f4de {caller_label}{count_str} \u2022 {duration_str} \u2022 {reason_str}",
                 ]
+
+                if after_hours:
+                    lines.insert(1, "\u26a0\ufe0f <b>Needs follow-up when open</b>")
 
                 if summary:
                     lines.append("")
                     lines.append(f"\U0001f4cb <b>Summary:</b>")
-                    lines.append(summary[:800])
+                    lines.append(summary[:1200])
                 elif transcript:
                     lines.append("")
-                    lines.append(f"\U0001f4ac <b>Transcript (last 500 chars):</b>")
-                    lines.append(transcript[-500:])
+                    if after_hours:
+                        lines.append(f"\U0001f4ac <b>Full Transcript:</b>")
+                        lines.append(transcript[:2000])
+                    else:
+                        lines.append(f"\U0001f4ac <b>Transcript (last 500 chars):</b>")
+                        lines.append(transcript[-500:])
 
                 send_telegram("\n".join(lines))
 

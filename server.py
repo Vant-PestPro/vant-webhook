@@ -282,16 +282,9 @@ def send_telegram_audio(recording_url: str, caption: str = ""):
 
 
 def is_business_hours(now_et: datetime) -> bool:
-    """Returns True if current time is within business hours (Mon–Fri 8am–6pm, Sat 8am–2pm)."""
-    weekday = now_et.weekday()  # 0=Mon, 6=Sun
+    """Returns True if current time is within business hours (7 days/week, 8am–6pm ET)."""
     time_decimal = now_et.hour + now_et.minute / 60.0
-
-    if weekday < 5:   # Mon–Fri
-        return 8.0 <= time_decimal < 18.0
-    elif weekday == 5:  # Saturday
-        return 8.0 <= time_decimal < 14.0
-    else:  # Sunday
-        return False
+    return 8.0 <= time_decimal < 18.0
 
 
 def get_time_context(now_et: datetime) -> str:
@@ -306,35 +299,31 @@ def get_routing_context(now_et: datetime) -> str:
     """Returns after-hours vs business-hours routing guidance."""
     if is_business_hours(now_et):
         return (
-            "We are currently OPEN during normal business hours. "
+            "We are currently open — normal business hours, 8 AM to 6 PM, seven days a week. "
             "You can schedule appointments, answer questions, and offer to connect callers with the team."
         )
     else:
-        weekday = now_et.weekday()
         hour = now_et.hour
-        if 0 <= hour < 7:
-            period = "very early morning — most people are asleep"
-        elif hour >= 22:
-            period = "late night"
+        if 0 <= hour < 6:
+            period = "the middle of the night"
+        elif hour >= 21:
+            period = "late evening"
         else:
-            period = "after business hours"
-
-        if weekday == 6:
-            next_open = "Monday morning at 8:00 AM"
-        elif weekday == 5 and now_et.hour >= 14:
-            next_open = "Monday morning at 8:00 AM"
-        else:
-            next_open = "tomorrow morning at 8:00 AM" if weekday < 4 else "Monday morning at 8:00 AM"
+            period = "outside our normal office hours"
 
         return (
-            f"We are currently CLOSED — it is {period}. "
-            f"The office reopens {next_open}. "
-            "For non-emergency pest issues, take a message. Ask for: (1) their full name, "
-            "(2) best callback number, (3) what pest issue they're dealing with, "
-            "(4) best time to call back. Confirm each piece before ending the call. "
-            "For genuine emergencies (active infestation causing health risk, commercial account crisis), "
-            "you can offer to attempt reaching Daniel at 954-410-6389. "
-            "Do NOT promise immediate response — just confirm their message will be passed to the team."
+            f"It is currently {period} — our office hours are 8 AM to 6 PM, seven days a week. "
+            "We are always available for urgent pest situations, 24 hours a day, 365 days a year. "
+            "IMPORTANT — how to handle this call naturally: "
+            "Do NOT open by announcing we are closed. Instead, warmly acknowledge the caller, "
+            "ask what is going on, and listen. Let them describe their situation first. "
+            "If it sounds urgent (active infestation, health risk, commercial property, can't wait until morning): "
+            "say something like 'I completely understand — that's not something you should have to deal with overnight. "
+            "Let me get someone on the line for you right now.' Then use the transferCall tool to reach our emergency line. "
+            "If it is routine and can wait: say something like 'Absolutely — our team will be back in the office at 8 AM. "
+            "I want to make sure someone reaches out to you first thing. Can I get your name and best callback number?' "
+            "Then collect: (1) full name, (2) best callback number, (3) pest issue, (4) best time to call back. "
+            "Confirm each piece before ending. Always close warmly — they should feel taken care of, not turned away."
         )
 
 

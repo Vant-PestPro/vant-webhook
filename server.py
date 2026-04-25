@@ -414,6 +414,38 @@ def health():
     })
 
 
+@app.route("/form-lead", methods=["POST"])
+def form_lead():
+    """Receives Formspree webhook submissions and forwards to Telegram Pest Pro Leads group."""
+    try:
+        data = request.get_json(force=True, silent=True) or request.form.to_dict()
+        app.logger.info(f"Form lead received: {data}")
+
+        name        = data.get("name", "").strip() or "Unknown"
+        phone       = data.get("phone", "").strip() or "Not provided"
+        email       = data.get("email", "").strip() or "Not provided"
+        pest        = data.get("pest_problem", "").strip() or "Not specified"
+        message     = data.get("message", "").strip()
+        source_page = data.get("_next", data.get("referrer", "")).strip()
+
+        lines = [
+            "\ud83d\udcec *New Website Lead*",
+            f"\ud83d\udc64 Name: {name}",
+            f"\ud83d\udcf1 Phone: {phone}",
+            f"\ud83d\udce7 Email: {email}",
+            f"\ud83d\udc1b Pest: {pest}",
+        ]
+        if message:
+            lines.append(f"\ud83d\udcac Message: {message}")
+
+        send_telegram("\n".join(lines))
+        return jsonify({"ok": True}), 200
+
+    except Exception as e:
+        app.logger.error(f"Form lead error: {e}", exc_info=True)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/callers", methods=["GET"])
 def list_callers():
     """Debug endpoint — list all caller records."""

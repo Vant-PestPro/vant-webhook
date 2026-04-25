@@ -258,6 +258,29 @@ def send_telegram(text: str):
         return False
 
 
+def send_telegram_audio(recording_url: str, caption: str = ""):
+    """Download a call recording and send it as a voice note to Daniel."""
+    try:
+        audio_resp = http_requests.get(recording_url, timeout=30)
+        if not audio_resp.ok:
+            app.logger.error(f"Failed to download recording: {audio_resp.status_code}")
+            return False
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendAudio"
+        resp = http_requests.post(url, data={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "caption": caption[:1024] if caption else "",
+            "title": "Vant Call Recording",
+        }, files={
+            "audio": ("call-recording.wav", audio_resp.content, "audio/wav")
+        }, timeout=60)
+        if not resp.ok:
+            app.logger.error(f"Telegram audio send failed: {resp.status_code} {resp.text[:200]}")
+        return resp.ok
+    except Exception as e:
+        app.logger.error(f"Telegram audio send error: {e}")
+        return False
+
+
 def is_business_hours(now_et: datetime) -> bool:
     """Returns True if current time is within business hours (Mon–Fri 8am–6pm, Sat 8am–2pm)."""
     weekday = now_et.weekday()  # 0=Mon, 6=Sun
@@ -477,6 +500,16 @@ def webhook():
                     lines.append(transcript[-500:])
 
                 send_telegram("\n".join(lines))
+
+                # Send call recording audio
+                artifact = src.get("artifact", {}) or payload.get("artifact", {})
+                recording_url = artifact.get("recordingUrl") or src.get("recordingUrl")
+                if recording_url:
+                    send_telegram_audio(recording_url)
+                    app.logger.info(f"Recording sent for {caller_number}")
+                else:
+                    app.logger.info(f"No recording URL in payload for {caller_number}")
+
                 app.logger.info(f"End-of-call handled for {caller_number}")
 
             except Exception as e:

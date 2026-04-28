@@ -661,12 +661,22 @@ def pumble_redirect():
         return "Missing code", 400
 
     try:
+        # Try the exchange endpoint (SDK-style)
         resp = http_requests.post(
-            f"{PUMBLE_API}/auth/workspaces/{PUMBLE_WORKSPACE_ID}/apps/{PUMBLE_APP_ID}/token",
+            f"{PUMBLE_API}/workspaces/{PUMBLE_WORKSPACE_ID}/exchange",
             headers={"Content-Type": "application/json"},
-            json={"code": code, "clientSecret": PUMBLE_CLIENT_SECRET},
+            json={"exchangeToken": code},
             timeout=10
         )
+        # Fallback: try the auth token endpoint
+        if resp.status_code != 200:
+            logging.warning(f"Exchange endpoint returned {resp.status_code}, trying auth token endpoint...")
+            resp = http_requests.post(
+                f"{PUMBLE_API}/auth/workspaces/{PUMBLE_WORKSPACE_ID}/apps/{PUMBLE_APP_ID}/token",
+                headers={"Content-Type": "application/json"},
+                json={"code": code, "clientSecret": PUMBLE_CLIENT_SECRET},
+                timeout=10
+            )
         if resp.status_code == 200:
             token_data = resp.json()
             save_pumble_bot_token(token_data)

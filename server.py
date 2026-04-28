@@ -613,6 +613,145 @@ try:
 except Exception as e:
     logging.error(f"DB init failed: {e}")
 
+# ── PUMBLE BOT ────────────────────────────────────────────────────────────────
+
+PUMBLE_APP_ID = os.environ.get("PUMBLE_APP_ID", "69f09b38170f81085d31cfd2")
+PUMBLE_CLIENT_SECRET = os.environ.get("PUMBLE_CLIENT_SECRET", "xpcls-defaebc768425897b1305f2d585da229")
+PUMBLE_SIGNING_SECRET = os.environ.get("PUMBLE_SIGNING_SECRET", "xpss-3336150887b20c0bbb45702133033eae")
+PUMBLE_WORKSPACE_ID = os.environ.get("PUMBLE_WORKSPACE_ID", "69f088d8bafb15ecbe65900c")
+PUMBLE_BOT_TOKEN_PATH = os.environ.get("PUMBLE_BOT_TOKEN_PATH", "/data/pumble_bot_token.json")
+PUMBLE_API = "https://api-ga.pumble.com"
+
+def get_pumble_bot_token():
+    """Load stored bot token from file."""
+    try:
+        with open(PUMBLE_BOT_TOKEN_PATH, "r") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def save_pumble_bot_token(token_data):
+    """Save bot token to persistent file."""
+    try:
+        os.makedirs(os.path.dirname(PUMBLE_BOT_TOKEN_PATH), exist_ok=True)
+        with open(PUMBLE_BOT_TOKEN_PATH, "w") as f:
+            json.dump(token_data, f)
+    except Exception as e:
+        logging.error(f"Failed to save Pumble bot token: {e}")
+
+def pumble_send_message(channel_id, text, bot_token):
+    """Send a message to a Pumble channel via bot API."""
+    try:
+        resp = http_requests.post(
+            f"{PUMBLE_API}/workspaces/{PUMBLE_WORKSPACE_ID}/messages",
+            headers={"Authorization": f"Bearer {bot_token}", "Content-Type": "application/json"},
+            json={"channelId": channel_id, "text": text},
+            timeout=10
+        )
+        return resp.status_code == 200
+    except Exception as e:
+        logging.error(f"Pumble send error: {e}")
+        return False
+
+@app.route("/redirect", methods=["GET"])
+def pumble_redirect():
+    """Handle Pumble OAuth redirect — exchange code for bot token."""
+    code = request.args.get("code")
+    if not code:
+        return "Missing code", 400
+
+    try:
+        resp = http_requests.post(
+            f"{PUMBLE_API}/auth/workspaces/{PUMBLE_WORKSPACE_ID}/apps/{PUMBLE_APP_ID}/token",
+            headers={"Content-Type": "application/json"},
+            json={"code": code, "clientSecret": PUMBLE_CLIENT_SECRET},
+            timeout=10
+        )
+        if resp.status_code == 200:
+            token_data = resp.json()
+            save_pumble_bot_token(token_data)
+            logging.info(f"Pumble bot token saved. Keys: {list(token_data.keys())}")
+            return "Vant bot installed successfully! You can close this tab.", 200
+        else:
+            logging.error(f"Token exchange failed: {resp.status_code} {resp.text[:200]}")
+            return f"Token exchange failed: {resp.status_code}", 400
+    except Exception as e:
+        logging.error(f"Redirect error: {e}")
+        return f"Error: {e}", 500
+
+@app.route("/manifest", methods=["GET"])
+def pumble_manifest():
+    """Serve app manifest for Pumble SDK."""
+    return jsonify({
+        "name": "vant-bot",
+        "displayName": "Vant",
+        "botTitle": "Vant — Pest Pro AI",
+        "bot": True,
+        "scopes": {
+            "botScopes": ["messages:read", "messages:write"],
+            "userScopes": ["messages:read"]
+        },
+        "eventSubscriptions": {
+            "url": "https://vant-webhook-production.up.railway.app/pumble/events",
+            "events": ["NEW_MESSAGE", "APP_UNAUTHORIZED", "APP_UNINSTALLED"]
+        },
+        "redirectUrls": ["https://vant-webhook-production.up.railway.app/redirect"],
+        "welcomeMessage": "Vant is online. Type @Vant to talk to me.",
+        "offlineMessage": "Vant is temporarily offline."
+    })
+
+@app.route("/pumble/events", methods=["POST"])
+def pumble_events():
+    """Handle incoming Pumble events (messages, etc.)."""
+    try:
+        data = request.get_json(force=True)
+        event_type = data.get("event", {}).get("type") or data.get("type", "")
+        logging.info(f"Pumble event: {event_type} — {str(data)[:200]}")
+
+        # Acknowledge immediately
+        if event_type in ("APP_UNAUTHORIZED", "APP_UNINSTALLED"):
+            return jsonify({"ok": True})
+
+        if event_type == "NEW_MESSAGE":
+            msg = data.get("event", {}).get("payload") or data.get("payload", {})
+            text = msg.get("text", "")
+            channel_id = msg.get("channelId", "")
+            sender = msg.get("authorId", "")
+
+            # Only respond to @vant mentions or DMs
+            if "@vant" not in text.lower() and "@Vant" not in text:
+                return jsonify({"ok": True})
+
+            # Load bot token
+            token_data = get_pumble_bot_token()
+            if not token_data:
+                logging.warning("No Pumble bot token available")
+                return jsonify({"ok": True})
+
+            bot_token = token_data.get("botToken") or token_data.get("bot_token") or token_data.get("access_token", "")
+
+            # Clean the message (remove @vant)
+            clean_text = text.replace("@vant", "").replace("@Vant", "").strip()
+
+            # Send to Telegram for Vant to see and respond
+            notif_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            http_requests.post(notif_url, json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": f"\u{1F4AC} Pumble @Vant mention in channel {channel_id}:\n{clean_text}\n\n_Reply here to respond in Pumble_",
+                "parse_mode": "Markdown"
+            }, timeout=5)
+
+            # Auto-acknowledge in Pumble
+            if bot_token:
+                pumble_send_message(channel_id, "Got it — I'll respond shortly.", bot_token)
+
+        return jsonify({"ok": True})
+
+    except Exception as e:
+        logging.error(f"Pumble event error: {e}", exc_info=True)
+        return jsonify({"ok": True})  # Always 200 to Pumble
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5050))
     app.run(host="0.0.0.0", port=port, debug=False)

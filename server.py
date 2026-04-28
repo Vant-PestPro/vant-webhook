@@ -737,7 +737,7 @@ def pumble_events():
             notif_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             http_requests.post(notif_url, json={
                 "chat_id": TELEGRAM_CHAT_ID,
-                "text": f"\u{1F4AC} Pumble @Vant mention in channel {channel_id}:\n{clean_text}\n\n_Reply here to respond in Pumble_",
+                "text": f"\U0001F4AC Pumble @Vant mention in channel {channel_id}:\n{clean_text}\n\n_Reply here to respond in Pumble_",
                 "parse_mode": "Markdown"
             }, timeout=5)
 

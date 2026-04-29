@@ -615,9 +615,9 @@ except Exception as e:
 
 # ── PUMBLE BOT ────────────────────────────────────────────────────────────────
 
-PUMBLE_APP_ID = os.environ.get("PUMBLE_APP_ID", "69f09b38170f81085d31cfd2")
-PUMBLE_CLIENT_SECRET = os.environ.get("PUMBLE_CLIENT_SECRET", "xpcls-defaebc768425897b1305f2d585da229")
-PUMBLE_SIGNING_SECRET = os.environ.get("PUMBLE_SIGNING_SECRET", "xpss-3336150887b20c0bbb45702133033eae")
+PUMBLE_APP_ID = os.environ.get("PUMBLE_APP_ID", "69f0a644a524654b0ff4a7f9")
+PUMBLE_CLIENT_SECRET = os.environ.get("PUMBLE_CLIENT_SECRET", "xpcls-eabd7a251a49ec6f1715fd42898f0e76")
+PUMBLE_SIGNING_SECRET = os.environ.get("PUMBLE_SIGNING_SECRET", "xpss-4825801c137f2138d3c90f86e7036ab4")
 PUMBLE_WORKSPACE_ID = os.environ.get("PUMBLE_WORKSPACE_ID", "69f088d8bafb15ecbe65900c")
 PUMBLE_BOT_TOKEN_PATH = os.environ.get("PUMBLE_BOT_TOKEN_PATH", "/data/pumble_bot_token.json")
 PUMBLE_API = "https://api-ga.pumble.com"
@@ -661,22 +661,17 @@ def pumble_redirect():
         return "Missing code", 400
 
     try:
-        # Try the exchange endpoint (SDK-style)
+        # Correct Pumble SDK OAuth2 token exchange endpoint
+        # SDK source confirms: POST /oauth2/access with multipart form-data
         resp = http_requests.post(
-            f"{PUMBLE_API}/workspaces/{PUMBLE_WORKSPACE_ID}/exchange",
-            headers={"Content-Type": "application/json"},
-            json={"exchangeToken": code},
+            f"{PUMBLE_API}/oauth2/access",
+            data={
+                'client-id': PUMBLE_APP_ID,
+                'client-secret': PUMBLE_CLIENT_SECRET,
+                'code': code
+            },
             timeout=10
         )
-        # Fallback: try the auth token endpoint
-        if resp.status_code != 200:
-            logging.warning(f"Exchange endpoint returned {resp.status_code}, trying auth token endpoint...")
-            resp = http_requests.post(
-                f"{PUMBLE_API}/auth/workspaces/{PUMBLE_WORKSPACE_ID}/apps/{PUMBLE_APP_ID}/token",
-                headers={"Content-Type": "application/json"},
-                json={"code": code, "clientSecret": PUMBLE_CLIENT_SECRET},
-                timeout=10
-            )
         if resp.status_code == 200:
             token_data = resp.json()
             save_pumble_bot_token(token_data)

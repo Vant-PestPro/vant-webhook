@@ -757,6 +757,16 @@ def pumble_events():
         return jsonify({"ok": True})  # Always 200 to Pumble
 
 
+@app.route("/pumble/debug", methods=["GET"])
+def pumble_debug():
+    """Debug: check if bot token is saved."""
+    token_data = get_pumble_bot_token()
+    if token_data:
+        bot_token = token_data.get("botToken") or token_data.get("token") or token_data.get("access_token", "")
+        return jsonify({"token_saved": True, "keys": list(token_data.keys()), "token_preview": bot_token[:20] + "..." if bot_token else None})
+    return jsonify({"token_saved": False, "path": PUMBLE_BOT_TOKEN_PATH})
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5050))
     app.run(host="0.0.0.0", port=port, debug=False)

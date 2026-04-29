@@ -643,11 +643,16 @@ def pumble_send_message(channel_id, text, bot_token):
     """Send a message to a Pumble channel via bot API."""
     try:
         resp = http_requests.post(
-            f"{PUMBLE_API}/workspaces/{PUMBLE_WORKSPACE_ID}/messages",
-            headers={"Authorization": f"Bearer {bot_token}", "Content-Type": "application/json"},
-            json={"channelId": channel_id, "text": text},
+            f"{PUMBLE_API}/v1/channels/{channel_id}/messages",
+            headers={
+                "Content-Type": "application/json",
+                "token": bot_token,
+                "x-app-token": PUMBLE_APP_ID
+            },
+            json={"text": text},
             timeout=10
         )
+        logging.info(f"Pumble send to {channel_id}: HTTP {resp.status_code} | {resp.text[:200]}")
         return resp.status_code == 200
     except Exception as e:
         logging.error(f"Pumble send error: {e}")

@@ -868,7 +868,7 @@ def pumble_events():
 @app.route("/version", methods=["GET"])
 def version():
     """Version check endpoint."""
-    return jsonify({"version": "2026-04-29-pumble-fix-v3", "pumble_api": "v1/channels", "x_app_token": "app_key"})
+    return jsonify({"version": "2026-04-29-claude-bridge-v4", "pumble_api": "v1/channels", "claude_bridge": "enabled"})
 
 
 @app.route("/pumble/debug", methods=["GET"])

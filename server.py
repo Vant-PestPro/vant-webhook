@@ -762,6 +762,12 @@ def pumble_events():
         return jsonify({"ok": True})  # Always 200 to Pumble
 
 
+@app.route("/version", methods=["GET"])
+def version():
+    """Version check endpoint."""
+    return jsonify({"version": "2026-04-29-pumble-fix-v2", "pumble_api": "v1/channels"})
+
+
 @app.route("/pumble/debug", methods=["GET"])
 def pumble_debug():
     """Debug: check if bot token is saved."""

@@ -616,6 +616,7 @@ except Exception as e:
 # ── PUMBLE BOT ────────────────────────────────────────────────────────────────
 
 PUMBLE_APP_ID = os.environ.get("PUMBLE_APP_ID", "69f0a644a524654b0ff4a7f9")
+PUMBLE_APP_KEY = os.environ.get("PUMBLE_APP_KEY", "xpat-8c5dfea06cf475a9e93d4d863f1b51bc")
 PUMBLE_CLIENT_SECRET = os.environ.get("PUMBLE_CLIENT_SECRET", "xpcls-eabd7a251a49ec6f1715fd42898f0e76")
 PUMBLE_SIGNING_SECRET = os.environ.get("PUMBLE_SIGNING_SECRET", "xpss-4825801c137f2138d3c90f86e7036ab4")
 PUMBLE_WORKSPACE_ID = os.environ.get("PUMBLE_WORKSPACE_ID", "69f088d8bafb15ecbe65900c")
@@ -647,7 +648,7 @@ def pumble_send_message(channel_id, text, bot_token):
             headers={
                 "Content-Type": "application/json",
                 "token": bot_token,
-                "x-app-token": PUMBLE_APP_ID
+                "x-app-token": PUMBLE_APP_KEY
             },
             json={"text": text},
             timeout=10
@@ -765,7 +766,7 @@ def pumble_events():
 @app.route("/version", methods=["GET"])
 def version():
     """Version check endpoint."""
-    return jsonify({"version": "2026-04-29-pumble-fix-v2", "pumble_api": "v1/channels"})
+    return jsonify({"version": "2026-04-29-pumble-fix-v3", "pumble_api": "v1/channels", "x_app_token": "app_key"})
 
 
 @app.route("/pumble/debug", methods=["GET"])

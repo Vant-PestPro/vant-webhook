@@ -805,11 +805,19 @@ def pumble_events():
     """Handle incoming Pumble events (messages, etc.)."""
     try:
         data = request.get_json(force=True)
+        logging.info(f"Pumble event raw: {str(data)[:300]}")
+
+        # Handle URL verification challenge (Pumble verifies endpoint on setup)
+        challenge = data.get("challenge")
+        if challenge:
+            logging.info(f"Pumble URL verification challenge received: {challenge}")
+            return jsonify({"challenge": challenge})
+
         event_type = data.get("event", {}).get("type") or data.get("type", "")
-        logging.info(f"Pumble event: {event_type} — {str(data)[:200]}")
+        logging.info(f"Pumble event type: {event_type}")
 
         # Acknowledge immediately
-        if event_type in ("APP_UNAUTHORIZED", "APP_UNINSTALLED"):
+        if event_type in ("APP_UNAUTHORIZED", "APP_UNINSTALLED", "URL_VERIFICATION"):
             return jsonify({"ok": True})
 
         if event_type == "NEW_MESSAGE":
@@ -868,7 +876,7 @@ def pumble_events():
 @app.route("/version", methods=["GET"])
 def version():
     """Version check endpoint."""
-    return jsonify({"version": "2026-04-29-claude-bridge-v4", "pumble_api": "v1/channels", "claude_bridge": "enabled"})
+    return jsonify({"version": "2026-04-29-claude-bridge-v5", "pumble_api": "v1/channels", "claude_bridge": "enabled", "url_verification": "handled"})
 
 
 @app.route("/pumble/debug", methods=["GET"])

@@ -20,6 +20,7 @@ import logging
 import json
 import os
 import sqlite3
+import threading
 import requests as http_requests
 
 app = Flask(__name__)
@@ -613,6 +614,94 @@ try:
 except Exception as e:
     logging.error(f"DB init failed: {e}")
 
+# ── CLAUDE AI BRIDGE ─────────────────────────────────────────────────────────
+
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+
+VANT_PUMBLE_SYSTEM_PROMPT = """You are Vant, the AI assistant for Pest Pro LLC, a pest control company in Central Florida.
+
+ABOUT PEST PRO:
+- Owner: Daniel Rumsey, CPO (954-410-6389)
+- Office line: (407) 922-2276
+- Website: pestprollc.com
+- Address: 3211 Vineland Rd #107, Kissimmee FL 34746
+- Hours: Mon-Sun 8AM-6PM, 24/7 emergency line
+- FDACS License: JB304313
+
+TEAM:
+- Daniel Rumsey — Owner/CEO (final approval on all external, financial, client-facing decisions)
+- Anne Rumsey — Office Manager (scheduling, billing, admin, client communication)
+- David Kell — Lead Field Technician (407-840-8852)
+- Brandon Rumsey — Field Technician
+
+SERVICES: GHP (General Home Protection), German Roach cleanouts (Code R), mosquito treatment, rodent control, ant control, bed bug treatment, commercial IPM, healthcare IPM, hospitality training. NO termite control.
+
+PRICING (general):
+- Monthly GHP: $49-$80/mo depending on property
+- Bi-monthly: $79/visit
+- Quarterly: $99/visit
+- German Roach cleanout (Code R): $120+ based on severity
+- One-time service: from $80 (no guarantee)
+
+TOOLS USED BY TEAM:
+- FieldworkHQ: scheduling and work orders (source of truth for jobs and calendar)
+- Pumble: team communication
+- GoHighLevel (GHL): CRM, contacts
+- Telegram: Daniel's primary communication channel with Vant
+
+YOUR ROLE IN PUMBLE:
+You support the team. When @Vant is mentioned, respond helpfully and concisely. You help with:
+- Logging and confirming client or lead information
+- Answering questions about services, pricing, scheduling
+- Flagging items that need Daniel's attention
+- Supporting Anne with day-to-day operational questions
+- Acknowledging work done by the team
+
+IMPORTANT RULES:
+- Professional, direct, warm tone. Write like a real team member, not a chatbot.
+- Never use em dashes (--), en dashes, or double hyphens in any output.
+- No AI-sounding phrases like 'it is worth noting', 'furthermore', 'robust', 'seamlessly'.
+- You are replying in a TEAM CHANNEL. Be concise. 1-3 short paragraphs max.
+- You are support staff, not the team's manager. Treat Anne and David as peers.
+- Never claim you can see FieldworkHQ or email unless you have actually verified it.
+- If you are unsure about something, say so clearly rather than guessing."""
+
+
+def get_ai_response(user_message: str, sender_id: str = "") -> str:
+    """Call Claude API to generate a real Vant response for a Pumble message."""
+    if not ANTHROPIC_API_KEY:
+        logging.error("ANTHROPIC_API_KEY not set")
+        return None
+    try:
+        prefix = f"[Pumble message from user {sender_id}]\n" if sender_id else ""
+        resp = http_requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            },
+            json={
+                "model": "claude-haiku-4-5",
+                "max_tokens": 600,
+                "system": VANT_PUMBLE_SYSTEM_PROMPT,
+                "messages": [
+                    {"role": "user", "content": f"{prefix}{user_message}"}
+                ]
+            },
+            timeout=30
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return data["content"][0]["text"].strip()
+        else:
+            logging.error(f"Claude API error: {resp.status_code} {resp.text[:200]}")
+            return None
+    except Exception as e:
+        logging.error(f"Claude API call failed: {e}")
+        return None
+
+
 # ── PUMBLE BOT ────────────────────────────────────────────────────────────────
 
 PUMBLE_APP_ID = os.environ.get("PUMBLE_APP_ID", "69f0a644a524654b0ff4a7f9")
@@ -744,17 +833,30 @@ def pumble_events():
             # Clean the message (remove @vant)
             clean_text = text.replace("@vant", "").replace("@Vant", "").strip()
 
-            # Send to Telegram for Vant to see and respond
+            # Notify Telegram (Daniel stays in the loop)
             notif_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             http_requests.post(notif_url, json={
                 "chat_id": TELEGRAM_CHAT_ID,
-                "text": f"\U0001F4AC Pumble @Vant mention in channel {channel_id}:\n{clean_text}\n\n_Reply here to respond in Pumble_",
+                "text": f"\U0001F4AC Pumble @Vant in #{channel_id}:\n{clean_text}",
                 "parse_mode": "Markdown"
             }, timeout=5)
 
-            # Auto-acknowledge in Pumble
+            # Generate AI response in background so we return 200 to Pumble immediately
             if bot_token:
-                pumble_send_message(channel_id, "Got it — I'll respond shortly.", bot_token)
+                captured_channel = channel_id
+                captured_text = clean_text
+                captured_token = bot_token
+                captured_sender = sender
+
+                def respond_async():
+                    ai_response = get_ai_response(captured_text, captured_sender)
+                    if ai_response:
+                        pumble_send_message(captured_channel, ai_response, captured_token)
+                    else:
+                        pumble_send_message(captured_channel, "Got it. Give me a moment and I will follow up.", captured_token)
+
+                t = threading.Thread(target=respond_async, daemon=True)
+                t.start()
 
         return jsonify({"ok": True})
 

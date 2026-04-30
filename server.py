@@ -912,22 +912,24 @@ def pumble_events():
             "parse_mode": "Markdown"
         }, timeout=5)
 
-        # Generate AI response in background
-        if bot_token:
-            cap_channel = channel_id
-            cap_text = clean_text
-            cap_token = bot_token
-            cap_sender = sender_id
+        # Route to Pumble-Bridge Telegram relay group for full Vant response
+        PUMBLE_RELAY_CHAT_ID = os.environ.get("PUMBLE_RELAY_CHAT_ID", "-1003978093731")
+        CHANNEL_NAMES = {
+            "69f089baa524654b0ff3f92a": "general",
+            "69f088d8bafb15ecbe659014": "all-active-customers",
+            "69f08913bafb15ecbe659231": "parkway",
+            "69f08913bafb15ecbe659233": "excelsior",
+            "69f08913bafb15ecbe659235": "sales-leads-new",
+        }
+        channel_name = CHANNEL_NAMES.get(channel_id, f"channel-{channel_id[:8]}")
+        relay_text = f"[PUMBLE-RELAY|channel:{channel_name}|channel_id:{channel_id}]\nFrom user: {sender_id}\n\n{clean_text}"
 
-            def respond_async():
-                ai_response = get_ai_response(cap_text, cap_sender)
-                if ai_response:
-                    pumble_send_message(cap_channel, ai_response, cap_token)
-                else:
-                    pumble_send_message(cap_channel, "Got it. Give me a moment and I will follow up.", cap_token)
-
-            t = threading.Thread(target=respond_async, daemon=True)
-            t.start()
+        relay_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        http_requests.post(relay_url, json={
+            "chat_id": int(PUMBLE_RELAY_CHAT_ID),
+            "text": relay_text
+        }, timeout=10)
+        logging.info(f"Relayed @Vant from #{channel_name} to Pumble-Bridge")
 
         return jsonify({"ok": True})
 
@@ -939,7 +941,7 @@ def pumble_events():
 @app.route("/version", methods=["GET"])
 def version():
     """Version check endpoint."""
-    return jsonify({"version": "2026-04-30-better-prompt-v8", "pumble_api": "v1/channels", "claude_bridge": "enabled", "url_verification": "handled", "event_logging": "enabled"})
+    return jsonify({"version": "2026-04-30-telegram-relay-v9", "pumble_api": "v1/channels", "claude_bridge": "enabled", "url_verification": "handled", "event_logging": "enabled"})
 
 
 @app.route("/pumble/debug", methods=["GET"])

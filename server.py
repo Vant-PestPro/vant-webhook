@@ -26,6 +26,9 @@ import requests as http_requests
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
+# In-memory log of recent Pumble events (last 20)
+RECENT_PUMBLE_EVENTS = []
+
 EASTERN = pytz.timezone("America/New_York")
 
 # Telegram notification config
@@ -806,6 +809,16 @@ def pumble_events():
     try:
         data = request.get_json(force=True)
         logging.info(f"Pumble event raw: {str(data)[:300]}")
+        # Store in recent events log
+        from datetime import datetime
+        import pytz
+        et = pytz.timezone('America/New_York')
+        RECENT_PUMBLE_EVENTS.append({
+            'time': datetime.now(et).strftime('%H:%M:%S'),
+            'data': str(data)[:400]
+        })
+        if len(RECENT_PUMBLE_EVENTS) > 20:
+            RECENT_PUMBLE_EVENTS.pop(0)
 
         # Handle URL verification challenge (Pumble verifies endpoint on setup)
         challenge = data.get("challenge")
@@ -876,17 +889,24 @@ def pumble_events():
 @app.route("/version", methods=["GET"])
 def version():
     """Version check endpoint."""
-    return jsonify({"version": "2026-04-29-claude-bridge-v5", "pumble_api": "v1/channels", "claude_bridge": "enabled", "url_verification": "handled"})
+    return jsonify({"version": "2026-04-30-event-debug-v6", "pumble_api": "v1/channels", "claude_bridge": "enabled", "url_verification": "handled", "event_logging": "enabled"})
 
 
 @app.route("/pumble/debug", methods=["GET"])
 def pumble_debug():
-    """Debug: check if bot token is saved."""
+    """Debug: check if bot token is saved and show recent events."""
     token_data = get_pumble_bot_token()
+    result = {
+        "token_saved": bool(token_data),
+        "keys": list(token_data.keys()) if token_data else [],
+        "token_preview": None,
+        "recent_events_count": len(RECENT_PUMBLE_EVENTS),
+        "recent_events": RECENT_PUMBLE_EVENTS[-5:]
+    }
     if token_data:
         bot_token = token_data.get("botToken") or token_data.get("token") or token_data.get("access_token", "")
-        return jsonify({"token_saved": True, "keys": list(token_data.keys()), "token_preview": bot_token[:20] + "..." if bot_token else None})
-    return jsonify({"token_saved": False, "path": PUMBLE_BOT_TOKEN_PATH})
+        result["token_preview"] = bot_token[:20] + "..." if bot_token else None
+    return jsonify(result)
 
 
 if __name__ == "__main__":

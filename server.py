@@ -687,7 +687,13 @@ def get_ai_response(user_message: str, sender_id: str = "") -> str:
         logging.error("ANTHROPIC_API_KEY not set")
         return None
     try:
-        prefix = f"[Pumble message from user {sender_id}]\n" if sender_id else ""
+        from datetime import datetime
+        import pytz as _pytz
+        eastern = _pytz.timezone("America/New_York")
+        now_str = datetime.now(eastern).strftime("%A, %B %d, %Y %I:%M %p EDT")
+        prefix = f"[Current time: {now_str}]\n"
+        if sender_id:
+            prefix += f"[Pumble message from user {sender_id}]\n"
         resp = http_requests.post(
             "https://api.anthropic.com/v1/messages",
             headers={

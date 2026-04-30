@@ -804,93 +804,132 @@ def pumble_manifest():
         "offlineMessage": "Vant is temporarily offline."
     })
 
+# Vant's bot user ID in Pumble (used to detect @Vant mentions in rich text blocks)
+VANT_BOT_USER_ID = "69f1a3164606315d1038e292"
+
+
+def extract_pumble_message(data: dict):
+    """
+    Parse Pumble's actual event format.
+    Events arrive as: {"body": "{JSON string}"}
+    Inner JSON: aId (author), cId (channel), bl (rich text blocks)
+    Returns (channel_id, sender_id, plain_text, has_vant_mention)
+    """
+    try:
+        body_str = data.get("body", "")
+        if not body_str:
+            return None, None, "", False
+
+        msg = json.loads(body_str)
+        channel_id = msg.get("cId", "")
+        sender_id = msg.get("aId", "")
+
+        plain_text = ""
+        has_vant_mention = False
+        blocks = msg.get("bl", [])
+
+        for block in blocks:
+            for section in block.get("elements", []):
+                for item in section.get("elements", []):
+                    if item.get("type") == "text":
+                        plain_text += item.get("text", "")
+                    elif item.get("type") == "user":
+                        uid = item.get("user_id", "")
+                        if uid == VANT_BOT_USER_ID:
+                            has_vant_mention = True
+                        else:
+                            plain_text += f"@{uid[:8]}"
+
+        return channel_id, sender_id, plain_text.strip(), has_vant_mention
+
+    except Exception as e:
+        logging.error(f"Error parsing Pumble message body: {e}")
+        return None, None, "", False
+
+
 @app.route("/pumble/events", methods=["POST"])
 def pumble_events():
-    """Handle incoming Pumble events (messages, etc.)."""
+    """Handle incoming Pumble events."""
     try:
         data = request.get_json(force=True)
-        logging.info(f"Pumble event raw: {str(data)[:300]}")
-        # Store in recent events log
-        from datetime import datetime
-        import pytz
-        et = pytz.timezone('America/New_York')
+        logging.info(f"Pumble event raw: {str(data)[:400]}")
+
+        # Store in debug log
         RECENT_PUMBLE_EVENTS.append({
-            'time': datetime.now(et).strftime('%H:%M:%S'),
+            'time': datetime.now(EASTERN).strftime('%H:%M:%S'),
             'data': str(data)[:400]
         })
         if len(RECENT_PUMBLE_EVENTS) > 20:
             RECENT_PUMBLE_EVENTS.pop(0)
 
-        # Handle URL verification challenge (Pumble verifies endpoint on setup)
+        # URL verification challenge
         challenge = data.get("challenge")
         if challenge:
-            logging.info(f"Pumble URL verification challenge received: {challenge}")
+            logging.info(f"URL verification challenge: {challenge}")
             return jsonify({"challenge": challenge})
 
+        # Legacy event type handling
         event_type = data.get("event", {}).get("type") or data.get("type", "")
-        logging.info(f"Pumble event type: {event_type}")
-
-        # Acknowledge immediately
         if event_type in ("APP_UNAUTHORIZED", "APP_UNINSTALLED", "URL_VERIFICATION"):
             return jsonify({"ok": True})
 
-        if event_type == "NEW_MESSAGE":
-            msg = data.get("event", {}).get("payload") or data.get("payload", {})
-            text = msg.get("text", "")
-            channel_id = msg.get("channelId", "")
-            sender = msg.get("authorId", "")
+        # Parse Pumble's actual format: {"body": "{JSON}"}
+        channel_id, sender_id, clean_text, has_vant_mention = extract_pumble_message(data)
 
-            # Only respond to @vant mentions or DMs
-            if "@vant" not in text.lower() and "@Vant" not in text:
-                return jsonify({"ok": True})
+        if not has_vant_mention:
+            logging.info(f"No @Vant mention detected, ignoring. channel={channel_id}")
+            return jsonify({"ok": True})
 
-            # Load bot token
-            token_data = get_pumble_bot_token()
-            if not token_data:
-                logging.warning("No Pumble bot token available")
-                return jsonify({"ok": True})
+        if not channel_id:
+            logging.warning("No channel_id in Pumble event")
+            return jsonify({"ok": True})
 
-            bot_token = token_data.get("botToken") or token_data.get("bot_token") or token_data.get("access_token", "")
+        logging.info(f"@Vant mention! channel={channel_id} text={clean_text[:100]}")
 
-            # Clean the message (remove @vant)
-            clean_text = text.replace("@vant", "").replace("@Vant", "").strip()
+        # Load bot token
+        token_data = get_pumble_bot_token()
+        if not token_data:
+            logging.warning("No Pumble bot token available")
+            return jsonify({"ok": True})
 
-            # Notify Telegram (Daniel stays in the loop)
-            notif_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-            http_requests.post(notif_url, json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": f"\U0001F4AC Pumble @Vant in #{channel_id}:\n{clean_text}",
-                "parse_mode": "Markdown"
-            }, timeout=5)
+        bot_token = token_data.get("botToken") or token_data.get("access_token", "")
 
-            # Generate AI response in background so we return 200 to Pumble immediately
-            if bot_token:
-                captured_channel = channel_id
-                captured_text = clean_text
-                captured_token = bot_token
-                captured_sender = sender
+        # Notify Daniel via Telegram
+        notif_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        http_requests.post(notif_url, json={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": f"\U0001F4AC Pumble @Vant: {clean_text}",
+            "parse_mode": "Markdown"
+        }, timeout=5)
 
-                def respond_async():
-                    ai_response = get_ai_response(captured_text, captured_sender)
-                    if ai_response:
-                        pumble_send_message(captured_channel, ai_response, captured_token)
-                    else:
-                        pumble_send_message(captured_channel, "Got it. Give me a moment and I will follow up.", captured_token)
+        # Generate AI response in background
+        if bot_token:
+            cap_channel = channel_id
+            cap_text = clean_text
+            cap_token = bot_token
+            cap_sender = sender_id
 
-                t = threading.Thread(target=respond_async, daemon=True)
-                t.start()
+            def respond_async():
+                ai_response = get_ai_response(cap_text, cap_sender)
+                if ai_response:
+                    pumble_send_message(cap_channel, ai_response, cap_token)
+                else:
+                    pumble_send_message(cap_channel, "Got it. Give me a moment and I will follow up.", cap_token)
+
+            t = threading.Thread(target=respond_async, daemon=True)
+            t.start()
 
         return jsonify({"ok": True})
 
     except Exception as e:
         logging.error(f"Pumble event error: {e}", exc_info=True)
-        return jsonify({"ok": True})  # Always 200 to Pumble
+        return jsonify({"ok": True})
 
 
 @app.route("/version", methods=["GET"])
 def version():
     """Version check endpoint."""
-    return jsonify({"version": "2026-04-30-event-debug-v6", "pumble_api": "v1/channels", "claude_bridge": "enabled", "url_verification": "handled", "event_logging": "enabled"})
+    return jsonify({"version": "2026-04-30-correct-parser-v7", "pumble_api": "v1/channels", "claude_bridge": "enabled", "url_verification": "handled", "event_logging": "enabled"})
 
 
 @app.route("/pumble/debug", methods=["GET"])

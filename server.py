@@ -820,6 +820,37 @@ def pumble_manifest():
         "offlineMessage": "Vant is temporarily offline."
     })
 
+
+# Pumble channel ID -> name + incoming webhook URL
+PUMBLE_CHANNEL_WEBHOOKS = {
+    "69f089baa524654b0ff3f92a": {"name": "general", "webhook": "https://api.pumble.com/workspaces/69f088d8bafb15ecbe65900c/incomingWebhooks/postMessage/qQnulTeYZMwGTI6EnwkS9cPz"},
+    "69f088d8bafb15ecbe659014": {"name": "all-active-customers", "webhook": "https://api.pumble.com/workspaces/69f088d8bafb15ecbe65900c/incomingWebhooks/postMessage/A5fIPdAKCwqYqqadUn9KhRPm"},
+    "69f0895d4606315d10330fd0": {"name": "excelsior", "webhook": "https://api.pumble.com/workspaces/69f088d8bafb15ecbe65900c/incomingWebhooks/postMessage/52jhkWFyTfcTyEQu8cAHc6Rm"},
+    "69f08913bafb15ecbe659231": {"name": "parkway", "webhook": "https://api.pumble.com/workspaces/69f088d8bafb15ecbe65900c/incomingWebhooks/postMessage/zCX7Hst8hJ3Hg1zW39mPIwZ3"},
+    "69f089f24606315d103312fc": {"name": "sales-leads-new", "webhook": "https://api.pumble.com/workspaces/69f088d8bafb15ecbe65900c/incomingWebhooks/postMessage/Wwhza8TCtX9GTDLaU7fuA95R"},
+}
+
+# Telegram DELTA relay config (Cleo bot -> DELTA group)
+DELTA_CHAT_ID = "-1003787895414"
+CLEO_BOT_TOKEN = "7741554651:AAFyhoAFM9Vvp5vm_x-fHRmfo4_7ptZAvIM"
+
+def forward_to_delta(channel_id, sender_name, message_text):
+    """Forward @Vant Pumble mention to DELTA Telegram group via Cleo bot."""
+    ch_info = PUMBLE_CHANNEL_WEBHOOKS.get(channel_id, {})
+    ch_name = ch_info.get("name", channel_id)
+    webhook_url = ch_info.get("webhook", "")
+    relay_msg = "🔔 PUMBLE | #" + ch_name + " | " + sender_name + ": " + message_text
+    if webhook_url:
+        relay_msg += "
+
+↩️ reply-to: " + webhook_url
+    try:
+        tg_url = "https://api.telegram.org/bot" + CLEO_BOT_TOKEN + "/sendMessage"
+        http_requests.post(tg_url, json={"chat_id": DELTA_CHAT_ID, "text": relay_msg}, timeout=10)
+        logging.info(f"Forwarded Pumble msg from {sender_name} in #{ch_name} to DELTA")
+    except Exception as e:
+        logging.error(f"DELTA forward error: {e}")
+
 # Vant's bot user ID in Pumble (used to detect @Vant mentions in rich text blocks)
 VANT_BOT_USER_ID = "69f1a3164606315d1038e292"
 
@@ -910,14 +941,16 @@ def pumble_events():
 
         bot_token = token_data.get("botToken") or token_data.get("access_token", "")
 
-        # Call Claude directly and reply in Pumble
-        ai_reply = get_ai_response(clean_text, sender_id)
-        if not ai_reply:
-            ai_reply = "Hit a snag on my end — try again in a sec."
+        # Resolve sender display name from Pumble user ID
+        sender_name = sender_id
 
-        logging.info(f"Vant replying to Pumble channel {channel_id}: {ai_reply[:100]}")
+        # Forward to DELTA Telegram group via Cleo bot for full Vant processing
+        forward_to_delta(channel_id, sender_name, clean_text)
+        logging.info(f"Pumble msg from {sender_name} in {channel_id} forwarded to DELTA")
+
+        # Brief ack in Pumble so team knows Vant received it
         if bot_token:
-            pumble_send_message(channel_id, ai_reply, bot_token)
+            pumble_send_message(channel_id, "On it 🧿", bot_token)
 
         return jsonify({"ok": True})
 
@@ -929,7 +962,7 @@ def pumble_events():
 @app.route("/version", methods=["GET"])
 def version():
     """Version check endpoint."""
-    return jsonify({"version": "2026-05-03-sonnet-v11", "pumble_api": "v1/channels", "claude_bridge": "direct", "url_verification": "handled"})
+    return jsonify({"version": "2026-05-03-delta-relay-v12", "pumble_api": "v1/channels", "claude_bridge": "direct", "url_verification": "handled"})
 
 
 @app.route("/pumble/debug", methods=["GET"])

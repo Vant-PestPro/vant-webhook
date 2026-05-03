@@ -702,8 +702,8 @@ def get_ai_response(user_message: str, sender_id: str = "") -> str:
                 "content-type": "application/json"
             },
             json={
-                "model": "claude-haiku-4-5",
-                "max_tokens": 600,
+                "model": "claude-3-5-sonnet-20241022",
+                "max_tokens": 2048,
                 "system": VANT_PUMBLE_SYSTEM_PROMPT,
                 "messages": [
                     {"role": "user", "content": f"{prefix}{user_message}"}
@@ -929,7 +929,7 @@ def pumble_events():
 @app.route("/version", methods=["GET"])
 def version():
     """Version check endpoint."""
-    return jsonify({"version": "2026-04-30-direct-v10", "pumble_api": "v1/channels", "claude_bridge": "direct", "url_verification": "handled"})
+    return jsonify({"version": "2026-05-03-sonnet-v11", "pumble_api": "v1/channels", "claude_bridge": "direct", "url_verification": "handled"})
 
 
 @app.route("/pumble/debug", methods=["GET"])

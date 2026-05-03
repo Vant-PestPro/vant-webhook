@@ -841,9 +841,7 @@ def forward_to_delta(channel_id, sender_name, message_text):
     webhook_url = ch_info.get("webhook", "")
     relay_msg = "🔔 PUMBLE | #" + ch_name + " | " + sender_name + ": " + message_text
     if webhook_url:
-        relay_msg += "
-
-↩️ reply-to: " + webhook_url
+        relay_msg += "\n\nreply-to: " + webhook_url
     try:
         tg_url = "https://api.telegram.org/bot" + CLEO_BOT_TOKEN + "/sendMessage"
         http_requests.post(tg_url, json={"chat_id": DELTA_CHAT_ID, "text": relay_msg}, timeout=10)

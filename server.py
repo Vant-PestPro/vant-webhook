@@ -643,7 +643,7 @@ except Exception as e:
 
 MEMORY_SERVER_URL = os.environ.get("MEMORY_SERVER_URL", "http://100.104.191.118:18790")
 MEMORY_SERVER_TOKEN = os.environ.get("MEMORY_SERVER_TOKEN", "061eed4d69ee5b4485b4cba6f10b5a4d6e40671baefa2067")
-TS_PROXY = os.environ.get("TS_PROXY", "http://localhost:1055")
+TS_PROXY = os.environ.get("TS_PROXY", "socks5://localhost:1080")
 
 # Surface files to fetch for Pumble context
 CONTEXT_FILES = ["clients.json", "pricing.json", "team.json", "company.json", "pending.json"]

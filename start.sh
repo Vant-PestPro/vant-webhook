@@ -2,7 +2,7 @@
 set -e
 
 # Start Tailscale daemon in userspace mode (no kernel modules required)
-tailscaled --tun=userspace-networking --outbound-http-proxy-listen=localhost:1055 &
+tailscaled --tun=userspace-networking --outbound-http-proxy-listen=localhost:1055 --socks5-server=localhost:1080 &
 TAILSCALED_PID=$!
 sleep 3
 

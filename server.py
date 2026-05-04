@@ -109,17 +109,15 @@ def init_db():
     # Firing a background warmup now means the first real @Vant mention is instant.
     def _warmup_memory_server():
         import time
-        time.sleep(5)  # Let tailscaled finish connecting
+        time.sleep(8)  # Let tailscaled finish connecting + WireGuard handshake
         try:
-            proxies = {"http": TS_PROXY, "https": TS_PROXY}
-            headers = {"Authorization": f"Bearer {MEMORY_SERVER_TOKEN}"}
-            resp = http_requests.get(
-                f"{MEMORY_SERVER_URL}/health",
-                headers=headers,
-                proxies=proxies,
-                timeout=20
+            data = _tailscale_curl_fetch(
+                f"{MEMORY_SERVER_URL}/health", MEMORY_SERVER_TOKEN, timeout=20
             )
-            logging.info(f"Memory server warmup: HTTP {resp.status_code}")
+            if data:
+                logging.info(f"Memory server warmup OK: {data}")
+            else:
+                logging.warning("Memory server warmup returned no data (non-fatal)")
         except Exception as e:
             logging.warning(f"Memory server warmup failed (non-fatal): {e}")
 
@@ -649,37 +647,66 @@ TS_PROXY = os.environ.get("TS_PROXY", "socks5://localhost:1080")
 CONTEXT_FILES = ["clients.json", "pricing.json", "team.json", "company.json", "pending.json"]
 
 
+def _tailscale_curl_fetch(url: str, token: str, timeout: int = 15) -> dict | None:
+    """
+    Use `tailscale curl` subprocess to fetch a URL through userspace Tailscale networking.
+    Returns parsed JSON dict on success, None on failure.
+    """
+    import subprocess as _sp
+    try:
+        result = _sp.run(
+            ["tailscale", "curl", "--silent", "--max-time", str(timeout),
+             "--header", f"Authorization: Bearer {token}", url],
+            capture_output=True, text=True, timeout=timeout + 5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return json.loads(result.stdout)
+        else:
+            logging.warning(f"tailscale curl failed (code {result.returncode}): {result.stderr[:200]}")
+            return None
+    except Exception as e:
+        logging.warning(f"tailscale curl exception: {e}")
+        return None
+
+
 def fetch_memory_context(timeout_per_file: int = 15) -> dict:
     """
     Fetch live memory surface files from the Mac mini via Tailscale.
+    Primary method: tailscale curl subprocess (handles userspace networking natively).
+    Falls back to direct HTTP with SOCKS5 proxy.
     Returns dict of filename -> parsed content (or None on failure).
-    Falls back gracefully if the memory server is unreachable.
     """
+    context = {}
     proxies = {"http": TS_PROXY, "https": TS_PROXY}
     headers = {"Authorization": f"Bearer {MEMORY_SERVER_TOKEN}"}
-    context = {}
 
     for fname in CONTEXT_FILES:
-        try:
-            resp = http_requests.get(
-                f"{MEMORY_SERVER_URL}/memory/{fname}",
-                headers=headers,
-                proxies=proxies,
-                timeout=timeout_per_file
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("ok"):
-                    try:
-                        context[fname] = json.loads(data["content"])
-                    except Exception:
-                        context[fname] = data["content"]  # Return raw string if not JSON
-                else:
-                    logging.warning(f"Memory server error for {fname}: {data}")
-            else:
-                logging.warning(f"Memory server HTTP {resp.status_code} for {fname}")
-        except Exception as e:
-            logging.warning(f"Memory fetch failed for {fname}: {e}")
+        url = f"{MEMORY_SERVER_URL}/memory/{fname}"
+        data = None
+
+        # Primary: tailscale curl (native userspace networking)
+        data = _tailscale_curl_fetch(url, MEMORY_SERVER_TOKEN, timeout=timeout_per_file)
+
+        # Fallback: Python requests via SOCKS5 proxy
+        if data is None:
+            try:
+                resp = http_requests.get(
+                    url, headers=headers, proxies=proxies, timeout=timeout_per_file
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+            except Exception as e:
+                logging.warning(f"Memory fetch fallback failed for {fname}: {e}")
+
+        if data and data.get("ok"):
+            try:
+                context[fname] = json.loads(data["content"])
+            except Exception:
+                context[fname] = data.get("content", "")
+        elif data:
+            logging.warning(f"Memory server error for {fname}: {data}")
+        else:
+            logging.warning(f"Memory fetch failed for {fname}: all methods exhausted")
 
     return context
 

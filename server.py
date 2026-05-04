@@ -99,30 +99,18 @@ def init_db():
                     INSERT INTO callers (phone, name, role, call_count, notes)
                     VALUES (?, ?, ?, 0, ?)
                 """, (seed["phone"], seed["name"], seed["role"], seed["notes"]))
+        # Memory cache table for push-based Vant memory context
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory_cache (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
         conn.commit()
         app.logger.info("DB initialized and seed data loaded.")
     finally:
         conn.close()
-
-    # Warm up Tailscale peer connection to Mac mini memory server at startup.
-    # First connection via userspace Tailscale proxy can take 10-20s for WireGuard handshake.
-    # Firing a background warmup now means the first real @Vant mention is instant.
-    def _warmup_memory_server():
-        import time
-        time.sleep(8)  # Let tailscaled finish connecting + WireGuard handshake
-        try:
-            data = _tailscale_curl_fetch(
-                f"{MEMORY_SERVER_URL}/health", MEMORY_SERVER_TOKEN, timeout=20
-            )
-            if data:
-                logging.info(f"Memory server warmup OK: {data}")
-            else:
-                logging.warning("Memory server warmup returned no data (non-fatal)")
-        except Exception as e:
-            logging.warning(f"Memory server warmup failed (non-fatal): {e}")
-
-    import threading as _threading
-    _threading.Thread(target=_warmup_memory_server, daemon=True).start()
 
 
 def get_caller(phone: str) -> dict | None:
@@ -672,42 +660,53 @@ def _tailscale_curl_fetch(url: str, token: str, timeout: int = 15) -> dict | Non
 
 def fetch_memory_context(timeout_per_file: int = 15) -> dict:
     """
-    Fetch live memory surface files from the Mac mini via Tailscale.
-    Primary method: tailscale curl subprocess (handles userspace networking natively).
-    Falls back to direct HTTP with SOCKS5 proxy.
-    Returns dict of filename -> parsed content (or None on failure).
+    Fetch live memory surface files.
+    Primary: read from SQLite cache (push-based from Mac mini via /memory/push).
+    Fallback: Tailscale SOCKS5 proxy (legacy, may time out in userspace mode).
+    Returns dict of filename -> parsed content.
     """
     context = {}
+
+    # Primary: read from DB cache (push-based)
+    try:
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT key, value FROM memory_cache WHERE key IN ({})".format(
+                ",".join(["?" for _ in CONTEXT_FILES])
+            ),
+            CONTEXT_FILES
+        ).fetchall()
+        conn.close()
+        for row in rows:
+            try:
+                context[row["key"]] = json.loads(row["value"])
+            except Exception:
+                context[row["key"]] = row["value"]
+        if context:
+            logging.info(f"Memory context loaded from DB cache: {list(context.keys())}")
+            return context
+    except Exception as e:
+        logging.warning(f"Memory DB read failed: {e}")
+
+    # Fallback: Tailscale SOCKS5
+    logging.warning("Memory DB empty — trying Tailscale SOCKS5 fallback")
     proxies = {"http": TS_PROXY, "https": TS_PROXY}
     headers = {"Authorization": f"Bearer {MEMORY_SERVER_TOKEN}"}
-
     for fname in CONTEXT_FILES:
         url = f"{MEMORY_SERVER_URL}/memory/{fname}"
-        data = None
-
-        # Primary: tailscale curl (native userspace networking)
         data = _tailscale_curl_fetch(url, MEMORY_SERVER_TOKEN, timeout=timeout_per_file)
-
-        # Fallback: Python requests via SOCKS5 proxy
         if data is None:
             try:
-                resp = http_requests.get(
-                    url, headers=headers, proxies=proxies, timeout=timeout_per_file
-                )
+                resp = http_requests.get(url, headers=headers, proxies=proxies, timeout=timeout_per_file)
                 if resp.status_code == 200:
                     data = resp.json()
             except Exception as e:
-                logging.warning(f"Memory fetch fallback failed for {fname}: {e}")
-
+                logging.warning(f"SOCKS5 fallback failed for {fname}: {e}")
         if data and data.get("ok"):
             try:
                 context[fname] = json.loads(data["content"])
             except Exception:
                 context[fname] = data.get("content", "")
-        elif data:
-            logging.warning(f"Memory server error for {fname}: {data}")
-        else:
-            logging.warning(f"Memory fetch failed for {fname}: all methods exhausted")
 
     return context
 
@@ -1136,6 +1135,50 @@ def pumble_events():
 def version():
     """Version check endpoint."""
     return jsonify({"version": "2026-05-03-delta-relay-v12", "pumble_api": "v1/channels", "claude_bridge": "direct", "url_verification": "handled"})
+
+
+@app.route("/memory/push", methods=["POST"])
+def memory_push():
+    """Receive pushed memory surfaces from Mac mini and cache in SQLite.
+    Auth: Authorization: Bearer <MEMORY_SERVER_TOKEN>
+    Body: {"surfaces": {"clients.json": "...", "pricing.json": "...", ...}}
+    """
+    auth = request.headers.get("Authorization", "")
+    if auth != f"Bearer {MEMORY_SERVER_TOKEN}":
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        data = request.get_json(force=True)
+        surfaces = data.get("surfaces", {})
+        if not surfaces:
+            return jsonify({"error": "no surfaces provided"}), 400
+        conn = get_db()
+        try:
+            now = datetime.now(EASTERN).isoformat()
+            for key, value in surfaces.items():
+                conn.execute(
+                    "INSERT OR REPLACE INTO memory_cache (key, value, updated_at) VALUES (?, ?, ?)",
+                    (key, value if isinstance(value, str) else json.dumps(value), now)
+                )
+            conn.commit()
+        finally:
+            conn.close()
+        logging.info(f"Memory push received: {list(surfaces.keys())}")
+        return jsonify({"ok": True, "updated": list(surfaces.keys())})
+    except Exception as e:
+        logging.error(f"Memory push error: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/memory/status", methods=["GET"])
+def memory_status():
+    """Check what memory surfaces are cached and when they were last pushed."""
+    try:
+        conn = get_db()
+        rows = conn.execute("SELECT key, updated_at FROM memory_cache ORDER BY updated_at DESC").fetchall()
+        conn.close()
+        return jsonify({"ok": True, "cached": [{"key": r["key"], "updated_at": r["updated_at"]} for r in rows]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/pumble/debug", methods=["GET"])

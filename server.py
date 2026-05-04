@@ -843,7 +843,7 @@ def get_ai_response(user_message: str, sender_id: str = "", live_context: str = 
                 "content-type": "application/json"
             },
             json={
-                "model": "claude-3-haiku-20240307",
+                "model": "claude-3-5-haiku-20241022",
                 "max_tokens": 2048,
                 "system": VANT_PUMBLE_SYSTEM_PROMPT,
                 "messages": [

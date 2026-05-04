@@ -617,6 +617,94 @@ try:
 except Exception as e:
     logging.error(f"DB init failed: {e}")
 
+# ── MEMORY CONTEXT FETCH ─────────────────────────────────────────────────────
+
+MEMORY_SERVER_URL = os.environ.get("MEMORY_SERVER_URL", "http://100.104.191.118:18790")
+MEMORY_SERVER_TOKEN = os.environ.get("MEMORY_SERVER_TOKEN", "061eed4d69ee5b4485b4cba6f10b5a4d6e40671baefa2067")
+TS_PROXY = os.environ.get("TS_PROXY", "http://localhost:1055")
+
+# Surface files to fetch for Pumble context
+CONTEXT_FILES = ["clients.json", "pricing.json", "team.json", "company.json", "pending.json"]
+
+
+def fetch_memory_context(timeout_per_file: int = 5) -> dict:
+    """
+    Fetch live memory surface files from the Mac mini via Tailscale.
+    Returns dict of filename -> parsed content (or None on failure).
+    Falls back gracefully if the memory server is unreachable.
+    """
+    proxies = {"http": TS_PROXY, "https": TS_PROXY}
+    headers = {"Authorization": f"Bearer {MEMORY_SERVER_TOKEN}"}
+    context = {}
+
+    for fname in CONTEXT_FILES:
+        try:
+            resp = http_requests.get(
+                f"{MEMORY_SERVER_URL}/memory/{fname}",
+                headers=headers,
+                proxies=proxies,
+                timeout=timeout_per_file
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("ok"):
+                    try:
+                        context[fname] = json.loads(data["content"])
+                    except Exception:
+                        context[fname] = data["content"]  # Return raw string if not JSON
+                else:
+                    logging.warning(f"Memory server error for {fname}: {data}")
+            else:
+                logging.warning(f"Memory server HTTP {resp.status_code} for {fname}")
+        except Exception as e:
+            logging.warning(f"Memory fetch failed for {fname}: {e}")
+
+    return context
+
+
+def build_context_block(context: dict) -> str:
+    """
+    Format fetched memory surfaces into a compact context string for Claude.
+    """
+    if not context:
+        return ""
+
+    lines = ["\n\n[LIVE MEMORY CONTEXT — fetched from Mac mini at query time]"]
+
+    if "clients.json" in context:
+        clients = context["clients.json"]
+        if isinstance(clients, list):
+            active = [c for c in clients if c.get("status") not in ("inactive", "archived", None)]
+            lines.append(f"\nACTIVE CLIENTS ({len(active)} of {len(clients)} total):")
+            for c in active[:15]:  # Cap at 15 to keep context size sane
+                name = c.get("name", "Unknown")
+                addr = c.get("address", "")
+                contact = c.get("contact_name", "") or c.get("contact", "")
+                phone = c.get("phone", "")
+                notes = c.get("notes", "") or c.get("status_notes", "")
+                lines.append(f"  • {name} | {addr} | {contact} {phone} | {notes}"[:120])
+
+    if "team.json" in context:
+        team = context["team.json"]
+        if isinstance(team, list):
+            lines.append("\nTEAM:")
+            for m in team:
+                lines.append(f"  • {m.get('name','')} ({m.get('role','')}) {m.get('phone','')}")
+
+    if "pending.json" in context:
+        pending = context["pending.json"]
+        if isinstance(pending, dict):
+            items = pending.get("items", []) or pending.get("pending", [])
+            if items:
+                urgent = [i for i in items if i.get("priority") in ("high", "urgent", "immediate")]
+                if urgent:
+                    lines.append("\nURGENT PENDING:")
+                    for item in urgent[:5]:
+                        lines.append(f"  • {item.get('text', item.get('description', ''))}"[:120])
+
+    return "\n".join(lines)
+
+
 # ── CLAUDE AI BRIDGE ─────────────────────────────────────────────────────────
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -681,8 +769,10 @@ IMPORTANT RULES:
 - If something genuinely requires Daniel's decision (financial, external-facing, structural), flag it clearly and concisely."""
 
 
-def get_ai_response(user_message: str, sender_id: str = "") -> str:
-    """Call Claude API to generate a real Vant response for a Pumble message."""
+def get_ai_response(user_message: str, sender_id: str = "", live_context: str = "") -> str:
+    """Call Claude API to generate a real Vant response for a Pumble message.
+    live_context is an optional pre-fetched memory context block.
+    """
     if not ANTHROPIC_API_KEY:
         logging.error("ANTHROPIC_API_KEY not set")
         return None
@@ -694,6 +784,8 @@ def get_ai_response(user_message: str, sender_id: str = "") -> str:
         prefix = f"[Current time: {now_str}]\n"
         if sender_id:
             prefix += f"[Pumble message from user {sender_id}]\n"
+        if live_context:
+            prefix += live_context + "\n\n"
         resp = http_requests.post(
             "https://api.anthropic.com/v1/messages",
             headers={
@@ -942,13 +1034,30 @@ def pumble_events():
         # Resolve sender display name from Pumble user ID
         sender_name = sender_id
 
-        # Forward to DELTA Telegram group via Cleo bot for full Vant processing
-        forward_to_delta(channel_id, sender_name, clean_text)
-        logging.info(f"Pumble msg from {sender_name} in {channel_id} forwarded to DELTA")
-
-        # Brief ack in Pumble so team knows Vant received it
+        # Ack immediately so Pumble doesn't time out
         if bot_token:
-            pumble_send_message(channel_id, "On it 🧿", bot_token)
+            pumble_send_message(channel_id, "On it", bot_token)
+
+        # Spawn background thread: fetch memory -> build context -> get AI response -> reply
+        def handle_in_background(ch_id, s_name, msg_text, b_token):
+            try:
+                logging.info(f"Background thread started for channel={ch_id}")
+                live_ctx = fetch_memory_context()
+                context_block = build_context_block(live_ctx)
+                ai_reply = get_ai_response(msg_text, sender_id=s_name, live_context=context_block)
+                pumble_send_message(ch_id, ai_reply, b_token)
+                logging.info(f"Background thread completed for channel={ch_id}")
+            except Exception as bg_err:
+                logging.error(f"Background thread error: {bg_err}", exc_info=True)
+
+        import threading
+        t = threading.Thread(
+            target=handle_in_background,
+            args=(channel_id, sender_name, clean_text, bot_token),
+            daemon=True
+        )
+        t.start()
+        logging.info(f"Pumble msg from {sender_name} in {channel_id} — background thread spawned")
 
         return jsonify({"ok": True})
 

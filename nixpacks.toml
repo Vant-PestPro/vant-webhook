@@ -1,5 +1,8 @@
 [phases.setup]
-nixPkgs = ["tailscale"]
+nixPkgs = ["python311", "tailscale"]
+
+[phases.install]
+cmds = ["python3 -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install -r requirements.txt"]
 
 [start]
 cmd = "bash start.sh"

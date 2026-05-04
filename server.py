@@ -649,23 +649,24 @@ CONTEXT_FILES = ["clients.json", "pricing.json", "team.json", "company.json", "p
 
 def _tailscale_curl_fetch(url: str, token: str, timeout: int = 15) -> dict | None:
     """
-    Use `tailscale curl` subprocess to fetch a URL through userspace Tailscale networking.
+    Use system curl with SOCKS5 proxy to fetch via Tailscale userspace networking.
     Returns parsed JSON dict on success, None on failure.
     """
     import subprocess as _sp
     try:
         result = _sp.run(
-            ["tailscale", "curl", "--silent", "--max-time", str(timeout),
+            ["curl", "--silent", "--max-time", str(timeout),
+             "--socks5", "127.0.0.1:1080",
              "--header", f"Authorization: Bearer {token}", url],
             capture_output=True, text=True, timeout=timeout + 5
         )
         if result.returncode == 0 and result.stdout.strip():
             return json.loads(result.stdout)
         else:
-            logging.warning(f"tailscale curl failed (code {result.returncode}): {result.stderr[:200]}")
+            logging.warning(f"curl socks5 failed (code {result.returncode}): {result.stderr[:200]}")
             return None
     except Exception as e:
-        logging.warning(f"tailscale curl exception: {e}")
+        logging.warning(f"curl socks5 exception: {e}")
         return None
 
 
@@ -843,7 +844,7 @@ def get_ai_response(user_message: str, sender_id: str = "", live_context: str = 
                 "content-type": "application/json"
             },
             json={
-                "model": "claude-3-5-sonnet-20241022",
+                "model": "claude-3-haiku-20240307",
                 "max_tokens": 2048,
                 "system": VANT_PUMBLE_SYSTEM_PROMPT,
                 "messages": [
@@ -1107,7 +1108,10 @@ def pumble_events():
                 live_ctx = fetch_memory_context()
                 context_block = build_context_block(live_ctx)
                 ai_reply = get_ai_response(msg_text, sender_id=s_name, live_context=context_block)
-                pumble_send_message(ch_id, ai_reply, b_token)
+                if ai_reply:
+                    pumble_send_message(ch_id, ai_reply, b_token)
+                else:
+                    logging.error(f"AI response was None for channel={ch_id} — skipping Pumble send")
                 logging.info(f"Background thread completed for channel={ch_id}")
             except Exception as bg_err:
                 logging.error(f"Background thread error: {bg_err}", exc_info=True)

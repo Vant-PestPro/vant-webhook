@@ -713,43 +713,50 @@ def fetch_memory_context(timeout_per_file: int = 15) -> dict:
 
 def build_context_block(context: dict) -> str:
     """
-    Format fetched memory surfaces into a compact context string for Claude.
+    Format fetched memory surfaces into a context string for Claude.
+    Passes full client records so Claude can answer detailed questions.
     """
     if not context:
         return ""
 
-    lines = ["\n\n[LIVE MEMORY CONTEXT — fetched from Mac mini at query time]"]
+    import json as _json
+    lines = ["\n\n[LIVE MEMORY CONTEXT — use this data to answer questions directly. Do NOT say you lack information if it appears below.]"]
 
     if "clients.json" in context:
-        clients = context["clients.json"]
-        if isinstance(clients, list):
-            active = [c for c in clients if c.get("status") not in ("inactive", "archived", None)]
-            lines.append(f"\nACTIVE CLIENTS ({len(active)} of {len(clients)} total):")
-            for c in active[:15]:  # Cap at 15 to keep context size sane
-                name = c.get("name", "Unknown")
-                addr = c.get("address", "")
-                contact = c.get("contact_name", "") or c.get("contact", "")
-                phone = c.get("phone", "")
-                notes = c.get("notes", "") or c.get("status_notes", "")
-                lines.append(f"  • {name} | {addr} | {contact} {phone} | {notes}"[:120])
+        clients_data = context["clients.json"]
+        # clients.json is a dict with 'active', 'residential', 'pending_leads', etc.
+        if isinstance(clients_data, dict):
+            all_clients = []
+            for section in ("active", "residential", "pending_leads", "on_hold", "other_commercial"):
+                section_data = clients_data.get(section, [])
+                if isinstance(section_data, list):
+                    all_clients.extend(section_data)
+            lines.append(f"\nCLIENT RECORDS ({len(all_clients)} entries):")
+            for c in all_clients:
+                if isinstance(c, dict):
+                    lines.append(_json.dumps(c, separators=(',', ':')))
+                elif isinstance(c, str):
+                    lines.append(f"  {c}")
+        elif isinstance(clients_data, list):
+            lines.append(f"\nCLIENT RECORDS ({len(clients_data)} entries):")
+            for c in clients_data:
+                lines.append(_json.dumps(c, separators=(',', ':')) if isinstance(c, dict) else str(c))
+
+    if "pricing.json" in context:
+        lines.append("\nPRICING:")
+        lines.append(_json.dumps(context["pricing.json"], separators=(',', ':')))
 
     if "team.json" in context:
-        team = context["team.json"]
-        if isinstance(team, list):
-            lines.append("\nTEAM:")
-            for m in team:
-                lines.append(f"  • {m.get('name','')} ({m.get('role','')}) {m.get('phone','')}")
+        lines.append("\nTEAM:")
+        lines.append(_json.dumps(context["team.json"], separators=(',', ':')))
+
+    if "company.json" in context:
+        lines.append("\nCOMPANY INFO:")
+        lines.append(_json.dumps(context["company.json"], separators=(',', ':')))
 
     if "pending.json" in context:
-        pending = context["pending.json"]
-        if isinstance(pending, dict):
-            items = pending.get("items", []) or pending.get("pending", [])
-            if items:
-                urgent = [i for i in items if i.get("priority") in ("high", "urgent", "immediate")]
-                if urgent:
-                    lines.append("\nURGENT PENDING:")
-                    for item in urgent[:5]:
-                        lines.append(f"  • {item.get('text', item.get('description', ''))}"[:120])
+        lines.append("\nPENDING ITEMS:")
+        lines.append(_json.dumps(context["pending.json"], separators=(',', ':')))
 
     return "\n".join(lines)
 
@@ -808,6 +815,8 @@ You help with:
 
 IMPORTANT RULES:
 - Professional, direct, warm tone. Write like a real team member who knows the business, not a hedging chatbot.
+- NEVER say you don't have information about a client or job if it appears in the LIVE MEMORY CONTEXT block. Read the full context before answering. The data is there.
+- NEVER say "I don't have a record", "not in my current context", "check FieldworkHQ", or "check GHL" when the answer is in the context block. That is a failure. Answer directly from what you have.
 - Never say "I'm not sure" or defer unnecessarily. If you know it, answer it.
 - Never use em dashes (--), en dashes, or double hyphens in any output.
 - No AI-sounding phrases: 'it is worth noting', 'I need to be straight with you', 'furthermore', 'robust', 'seamlessly', 'I appreciate the question'.

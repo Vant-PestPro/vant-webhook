@@ -104,6 +104,28 @@ def init_db():
     finally:
         conn.close()
 
+    # Warm up Tailscale peer connection to Mac mini memory server at startup.
+    # First connection via userspace Tailscale proxy can take 10-20s for WireGuard handshake.
+    # Firing a background warmup now means the first real @Vant mention is instant.
+    def _warmup_memory_server():
+        import time
+        time.sleep(5)  # Let tailscaled finish connecting
+        try:
+            proxies = {"http": TS_PROXY, "https": TS_PROXY}
+            headers = {"Authorization": f"Bearer {MEMORY_SERVER_TOKEN}"}
+            resp = http_requests.get(
+                f"{MEMORY_SERVER_URL}/health",
+                headers=headers,
+                proxies=proxies,
+                timeout=20
+            )
+            logging.info(f"Memory server warmup: HTTP {resp.status_code}")
+        except Exception as e:
+            logging.warning(f"Memory server warmup failed (non-fatal): {e}")
+
+    import threading as _threading
+    _threading.Thread(target=_warmup_memory_server, daemon=True).start()
+
 
 def get_caller(phone: str) -> dict | None:
     """Look up a caller by phone number. Returns dict or None."""
@@ -627,7 +649,7 @@ TS_PROXY = os.environ.get("TS_PROXY", "http://localhost:1055")
 CONTEXT_FILES = ["clients.json", "pricing.json", "team.json", "company.json", "pending.json"]
 
 
-def fetch_memory_context(timeout_per_file: int = 5) -> dict:
+def fetch_memory_context(timeout_per_file: int = 15) -> dict:
     """
     Fetch live memory surface files from the Mac mini via Tailscale.
     Returns dict of filename -> parsed content (or None on failure).

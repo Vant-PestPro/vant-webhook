@@ -963,8 +963,9 @@ def extract_pumble_message(data: dict):
 
         plain_text = ""
         has_vant_mention = False
-        blocks = msg.get("bl", [])
 
+        # Format 1: rich text blocks (bl)
+        blocks = msg.get("bl", [])
         for block in blocks:
             for section in block.get("elements", []):
                 for item in section.get("elements", []):
@@ -976,6 +977,18 @@ def extract_pumble_message(data: dict):
                             has_vant_mention = True
                         else:
                             plain_text += f"@{uid[:8]}"
+
+        # Format 2: flat text + mentions array (fallback)
+        if not plain_text:
+            plain_text = msg.get("text", "")
+        if not has_vant_mention:
+            for m in msg.get("mentions", []):
+                if m.get("userId") == VANT_BOT_USER_ID or m.get("user_id") == VANT_BOT_USER_ID:
+                    has_vant_mention = True
+
+        # Format 3: last resort — plain @Vant text scan
+        if not has_vant_mention and "@vant" in plain_text.lower():
+            has_vant_mention = True
 
         return channel_id, sender_id, plain_text.strip(), has_vant_mention
 

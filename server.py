@@ -23,6 +23,71 @@ import sqlite3
 import threading
 import requests as http_requests
 
+# ── QDRANT KNOWLEDGE BASE (optional — graceful degradation if not configured) ──
+QDRANT_URL = os.environ.get("QDRANT_URL", "")
+QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+QDRANT_COLLECTION = "pest_pro_knowledge"
+
+_qdrant_client = None
+_genai_ready = False
+
+_gemini_client = None
+
+def _init_qdrant():
+    """Initialize Qdrant client and Gemini if env vars are set. Silently skips if not."""
+    global _qdrant_client, _genai_ready, _gemini_client
+    if QDRANT_URL and QDRANT_API_KEY:
+        try:
+            from qdrant_client import QdrantClient
+            _qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=5)
+            logging.info("Qdrant knowledge base connected.")
+        except Exception as e:
+            logging.warning(f"Qdrant init failed (non-critical): {e}")
+    if GEMINI_API_KEY:
+        try:
+            from google import genai as google_genai
+            _gemini_client = google_genai.Client(api_key=GEMINI_API_KEY)
+            _genai_ready = True
+            logging.info("Gemini embeddings ready.")
+        except Exception as e:
+            logging.warning(f"Gemini init failed (non-critical): {e}")
+
+
+def query_knowledge(query: str, top_k: int = 3) -> str:
+    """
+    Search Pest Pro knowledge base for relevant context.
+    Returns formatted string of top results, or empty string if unavailable.
+    Fails gracefully — never raises exceptions.
+    """
+    if not _qdrant_client or not _genai_ready or not _gemini_client:
+        return ""
+    try:
+        result = _gemini_client.models.embed_content(
+            model="gemini-embedding-001",
+            contents=query
+        )
+        query_vector = list(result.embeddings[0].values)
+        hits = _qdrant_client.query_points(
+            collection_name=QDRANT_COLLECTION,
+            query=query_vector,
+            limit=top_k,
+            score_threshold=0.55
+        ).points
+        if not hits:
+            return ""
+        parts = []
+        for hit in hits:
+            parts.append(f"[{hit.payload.get('title', 'Knowledge')}]\n{hit.payload.get('content', '')}")
+        return "\n\n".join(parts)
+    except Exception as e:
+        logging.warning(f"Knowledge query failed (non-critical): {e}")
+        return ""
+
+
+# Initialize Qdrant on startup (non-blocking — runs in background)
+threading.Thread(target=_init_qdrant, daemon=True).start()
+
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -1138,6 +1203,80 @@ def pumble_events():
     except Exception as e:
         logging.error(f"Pumble event error: {e}", exc_info=True)
         return jsonify({"ok": True})
+
+
+@app.route("/knowledge", methods=["POST", "GET"])
+def knowledge_search():
+    """
+    Pest Pro knowledge base search endpoint.
+    POST: {"query": "how much does GHP cost?"} → returns relevant knowledge chunks
+    GET: returns status of the knowledge base connection
+    Used by Vapi tool calls, Pumble bot context, or any internal service needing Pest Pro knowledge.
+    """
+    if request.method == "GET":
+        status = {
+            "qdrant_connected": _qdrant_client is not None,
+            "embeddings_ready": _genai_ready,
+            "collection": QDRANT_COLLECTION
+        }
+        if _qdrant_client:
+            try:
+                info = _qdrant_client.get_collection(QDRANT_COLLECTION)
+                status["points_count"] = info.points_count
+                status["status"] = "operational"
+            except Exception as e:
+                status["status"] = f"error: {e}"
+        else:
+            status["status"] = "not configured"
+        return jsonify(status)
+
+    try:
+        payload = request.get_json(force=True, silent=True) or {}
+        query = (payload.get("query") or "").strip()
+        top_k = min(int(payload.get("top_k", 3)), 5)
+
+        if not query:
+            return jsonify({"error": "query is required", "results": []}), 400
+
+        if not _qdrant_client or not _genai_ready or not _gemini_client:
+            return jsonify({
+                "results": [],
+                "context": "",
+                "status": "unavailable",
+                "message": "Knowledge base not configured on this instance."
+            })
+
+        result = _gemini_client.models.embed_content(
+            model="gemini-embedding-001",
+            contents=query
+        )
+        query_vector = list(result.embeddings[0].values)
+        hits = _qdrant_client.query_points(
+            collection_name=QDRANT_COLLECTION,
+            query=query_vector,
+            limit=top_k,
+            score_threshold=0.50
+        ).points
+
+        results = []
+        for hit in hits:
+            results.append({
+                "title": hit.payload.get("title", ""),
+                "content": hit.payload.get("content", ""),
+                "topic": hit.payload.get("topic", ""),
+                "score": round(hit.score, 3)
+            })
+
+        context = "\n\n".join(
+            f"[{r['title']}]\n{r['content']}" for r in results
+        )
+
+        app.logger.info(f"Knowledge query: '{query[:60]}' -> {len(results)} results")
+        return jsonify({"results": results, "context": context, "status": "ok"})
+
+    except Exception as e:
+        app.logger.error(f"Knowledge search error: {e}", exc_info=True)
+        return jsonify({"error": str(e), "results": [], "status": "error"}), 500
 
 
 @app.route("/version", methods=["GET"])

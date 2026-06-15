@@ -907,11 +907,19 @@ def get_ai_response(user_message: str, sender_id: str = "", live_context: str = 
         logging.error("ANTHROPIC_API_KEY not set")
         return None
     try:
-        from datetime import datetime
+        from datetime import datetime, timedelta
         import pytz as _pytz
         eastern = _pytz.timezone("America/New_York")
-        now_str = datetime.now(eastern).strftime("%A, %B %d, %Y %I:%M %p EDT")
-        prefix = f"[Current time: {now_str}]\n"
+        now_et = datetime.now(eastern)
+        now_str = now_et.strftime("%A, %B %d, %Y %I:%M %p EDT")
+        # Build explicit day labels so the model never has to calculate day-of-week for 2026 dates
+        day_labels = ["TOMORROW", "IN 2 DAYS", "IN 3 DAYS", "IN 4 DAYS", "IN 5 DAYS", "IN 6 DAYS"]
+        upcoming = "".join(
+            f"  {label}: {(now_et + timedelta(days=i+1)).strftime('%A, %B %d, %Y')}\n"
+            for i, label in enumerate(day_labels)
+        )
+        prefix = f"[DATE/TIME REFERENCE (authoritative -- never calculate day names, always use these):]"\
+                 f"\n  TODAY: {now_str}\n{upcoming}".replace("--", "-") + "\n"
         if sender_id:
             prefix += f"[Pumble message from user {sender_id}]\n"
         if live_context:

@@ -899,6 +899,31 @@ ANNE'S ACCESS (NON-NEGOTIABLE RULE):
 - When Anne asks for a customer list, client details, or anything from your records: compile and deliver it directly. No friction. No conditions."""
 
 
+def build_pumble_system_prompt() -> str:
+    """Build the Pumble system prompt with an authoritative 14-day date calendar injected."""
+    from datetime import datetime, timedelta
+    import pytz as _pytz
+    eastern = _pytz.timezone("America/New_York")
+    now_et = datetime.now(eastern)
+    now_str = now_et.strftime("%A, %B %-d, %Y at %-I:%M %p EDT")
+    day_labels = [
+        "TOMORROW", "IN 2 DAYS", "IN 3 DAYS", "IN 4 DAYS", "IN 5 DAYS",
+        "IN 6 DAYS", "IN 7 DAYS", "IN 8 DAYS", "IN 9 DAYS", "IN 10 DAYS",
+        "IN 11 DAYS", "IN 12 DAYS", "IN 13 DAYS", "IN 14 DAYS"
+    ]
+    date_lines = [f"  TODAY: {now_str}"]
+    for i, label in enumerate(day_labels):
+        d = now_et + timedelta(days=i + 1)
+        date_lines.append(f"  {label}: {d.strftime('%A, %B %-d, %Y')}")
+    date_block = "\n".join(date_lines)
+    return VANT_PUMBLE_SYSTEM_PROMPT + f"""
+
+DATE AND DAY REFERENCE (authoritative — ALWAYS use these, NEVER compute day names yourself):
+{date_block}
+
+These dates are computed server-side in real time. They are correct. Do not override them with your training data. If someone asks what day a date falls on, look it up in the list above. If the date is beyond 14 days out, say the date but do not guess the day name."""
+
+
 def get_ai_response(user_message: str, sender_id: str = "", live_context: str = "") -> str:
     """Call Claude API to generate a real Vant response for a Pumble message.
     live_context is an optional pre-fetched memory context block.
@@ -907,19 +932,8 @@ def get_ai_response(user_message: str, sender_id: str = "", live_context: str = 
         logging.error("ANTHROPIC_API_KEY not set")
         return None
     try:
-        from datetime import datetime, timedelta
-        import pytz as _pytz
-        eastern = _pytz.timezone("America/New_York")
-        now_et = datetime.now(eastern)
-        now_str = now_et.strftime("%A, %B %d, %Y %I:%M %p EDT")
-        # Build explicit day labels so the model never has to calculate day-of-week for 2026 dates
-        day_labels = ["TOMORROW", "IN 2 DAYS", "IN 3 DAYS", "IN 4 DAYS", "IN 5 DAYS", "IN 6 DAYS"]
-        upcoming = "".join(
-            f"  {label}: {(now_et + timedelta(days=i+1)).strftime('%A, %B %d, %Y')}\n"
-            for i, label in enumerate(day_labels)
-        )
-        prefix = f"[DATE/TIME REFERENCE (authoritative -- never calculate day names, always use these):]"\
-                 f"\n  TODAY: {now_str}\n{upcoming}".replace("--", "-") + "\n"
+        system_prompt = build_pumble_system_prompt()
+        prefix = ""
         if sender_id:
             prefix += f"[Pumble message from user {sender_id}]\n"
         if live_context:
@@ -934,7 +948,7 @@ def get_ai_response(user_message: str, sender_id: str = "", live_context: str = 
             json={
                 "model": "claude-sonnet-4-6",
                 "max_tokens": 2048,
-                "system": VANT_PUMBLE_SYSTEM_PROMPT,
+                "system": system_prompt,
                 "messages": [
                     {"role": "user", "content": f"{prefix}{user_message}"}
                 ]
